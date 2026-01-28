@@ -1,0 +1,13 @@
+async-timeout==5.0.1
+ezipset==1.0.0
+markdown-it-py==4.0.0
+mdurl==0.1.2
+prompt_toolkit==3.0.52
+psutil==7.2.1
+Pygments==2.19.2
+pyroute2==0.9.5
+python-iptables==1.2.0
+redis==7.1.0
+rich==14.2.0
+scapy==2.7.0
+wcwidth==0.3.0
