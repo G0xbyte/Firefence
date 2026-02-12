@@ -8,7 +8,7 @@ import time
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
-from Classes.Colors import Colors
+from Classes.Logging import Colors
 from Classes.Service import Service
 
 logging.basicConfig(

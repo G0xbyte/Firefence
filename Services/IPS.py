@@ -1,8 +1,10 @@
-from scapy.all import sniff, IP, DNS, DNSQR
+from scapy.all import sniff, IP, DNS, TCP, DNSQR, Raw, send
 from scapy.layers.http import HTTPRequest
 import redis
 import re
 import base64
+import subprocess
+from netfilterqueue import NetfilterQueue
 
 #############################################################
 # Monitor cmd
@@ -18,6 +20,8 @@ THRESHOLD = 5
 SNIFF_WINDOW = 60
 BLOCK_DURATION = 500
 PV_IPS = ["1.1.1.1", "127.0.0.1"]
+QUEUE_NUM = 1
+
 SUS_UA = suspicious_user_agents = [
     "python-requests",
     "Python-urllib",
@@ -52,6 +56,18 @@ SUS_UA = suspicious_user_agents = [
 ]
 
 r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+def manage_iptables(action):
+    cmds = [
+        f"sudo iptables {action} OUTPUT -j NFQUEUE --queue-num {QUEUE_NUM}",
+        f"sudo iptables {action} INPUT -j NFQUEUE --queue-num {QUEUE_NUM}"
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd.split(), check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            if action == "-I":
+                print(f"[!] Erreur configuration iptables (Action {action})")
 
 def safe_b64_decode(payload):
     if isinstance(payload, str):
@@ -121,6 +137,7 @@ def is_suspicious(type, payload):
     return False
 
 def is_pv_ip(ip):
+    print("[DEBUG] Checking if IP is PV: ", ip, end="")
     try:
         parts = [int(part) for part in ip.split('.')]
     except ValueError:
@@ -138,72 +155,93 @@ def is_pv_ip(ip):
         return True
     return False
 
+def timeout_ip(ip):
+    # Send command to filter service to timeout IP
+    r.setex(f"blocked:{ip}", BLOCK_DURATION, "true")
+
 def count_ip(src_ip, dest_ip):
     current_count = r.incr(dest_ip)
 
     if current_count == 1:
-            r.expire(dest_ip, SNIFF_WINDOW)
-            print(f"[+] : {src_ip} -> {dest_ip}")
+        r.expire(dest_ip, SNIFF_WINDOW)
 
-def monitor_packet(packet):
-    if IP not in packet:
+    if current_count > THRESHOLD:
+        print(f"[!!] Threshold exceeded for IP {dest_ip}. Blocking for {BLOCK_DURATION} seconds.")
+        timeout_ip(dest_ip)
+
+def is_exfiltration(pkt, src_ip, dest_ip):
+    is_malicious = False
+
+    if pkt.haslayer(DNS) and pkt[DNS].qr == 0:
+        print("DNS query detected")
+        qname = pkt[DNSQR].qname.decode(errors='ignore')
+        subdomain = qname.split('.')[0]
+        if is_suspicious("DNS", subdomain):
+            is_malicious = True
+
+    if pkt.haslayer(HTTPRequest):
+        print("HTTP query detected")
+        headers = pkt[HTTPRequest].fields
+        ua = headers.get('User-Agent', b'').decode(errors='ignore')
+        cookie = headers.get('Cookie', b'').decode(errors='ignore')
+
+        if is_suspicious("USER-AGENT", ua) or is_suspicious("COOKIE", cookie):
+            is_malicious = True
+
+        if pkt.haslayer(Raw):
+            data = pkt[Raw].load.decode(errors='ignore')
+            if is_suspicious("POST", data):
+                is_malicious = True
+
+    if is_malicious:
+        print(f"[DROP] Malicious activity from {src_ip} to {dest_ip}")
+
+        current_count = r.incr(dest_ip)
+        if current_count == 1: r.expire(dest_ip, SNIFF_WINDOW)
+        if current_count > THRESHOLD:
+            timeout_ip(dest_ip)
+            print(f"[!!!] IP {dest_ip} BLOCKED for {BLOCK_DURATION}s")
+
+        return True
+    return False
+
+def process_packet(nf_packet):
+    pkt = IP(nf_packet.get_payload())
+    src_ip = pkt.src
+    dest_ip = pkt.dst
+
+    if r.exists(f"blocked:{src_ip}"):
+        nf_packet.drop()
         return
 
-    src_ip = packet[IP].src
-    dest_ip = packet[IP].dst
+    if pkt.haslayer(TCP) and (pkt[TCP].dport == 443 or pkt[TCP].sport == 443):
+        nf_packet.accept()
+        return
 
-    if IP in packet and is_pv_ip(src_ip):
-        print("========================")
-        print(f"[+] {src_ip} -> {dest_ip}")
-
-        count_ip(src_ip, dest_ip)
-
-        if packet.haslayer(DNS):
-            dns_type = "Query" if packet[DNS].qr == 0 else "Response"
-
-            if dns_type == "Response":
-                return
-            qname = packet[DNSQR].qname.decode(errors='ignore') if packet.haslayer(DNSQR) else "N/A"
-            print(f"[DNS] {dns_type} for {qname}")
-            try:
-                parts = qname.strip('.').split('.')
-                if len(parts) >= 3:
-                    print("[?] Subdomain detected in DNS Query")
-                    is_suspicious("DNS", parts[0])
-            except Exception as e:
-                print(f"[!] Error processing DNS Query: {e}")
-
-        if packet.haslayer(HTTPRequest):
-            method = packet[HTTPRequest].Method.decode(errors='ignore')
-            host = packet[HTTPRequest].Host.decode(errors='ignore')
-            path = packet[HTTPRequest].Path.decode(errors='ignore')
-            headers = packet[HTTPRequest].fields
-
-            print(f"[HTTP] {method} request to {host}{path}")
-
-            user_a = headers.get('User_Agent', b'').decode(errors='ignore')
-            if user_a == '':
-                user_a = headers.get('User-Agent', b'').decode(errors='ignore')
-            cookie = headers.get('Cookie', b'').decode(errors='ignore')
-
-            print(f"User-Agent: {user_a}")
-            print(f"Cookie: {cookie}")
-
-            if method == "POST" and packet.haslayer('Raw'):
-                data = packet.getlayer('Raw').load.decode(errors='ignore')
-                print(f"[HTTP] POST Data: {data}")
-                is_suspicious("POST", data)
-            is_suspicious("USER-AGENT", user_a)
-            is_suspicious("COOKIE", cookie)
-
-            # If is suspicious increment count && Drop request
-            # If count > THRESHOLD -> Timeout IP
+    # Detect exfiltration
+    if is_pv_ip(src_ip):
+        print(" yes")
+        pkt.summary()
+        if is_exfiltration(pkt, src_ip, dest_ip):
+            nf_packet.drop()
+            return
+    else:
+        print(" no")
+    nf_packet.accept()
 
 
 if __name__ == "__main__":
-    print(f"[+] Service started")
-    print(f"[+] Monitoring traffic...")
+    print("[+] Configuration des règles iptables...")
+    manage_iptables("-I")
 
-    sniff(iface="enxaa9c78b394f4", filter="ip", prn=lambda x: monitor_packet(x), store=0)
-
-    # sniff(iface=["eth0", "eth1"], filter="ip", prn=lambda x: monitor_packet(x), store=0)
+    try:
+        print("[+] Monitoring en cours (NFQUEUE)...")
+        nfqueue = NetfilterQueue()
+        nfqueue.bind(QUEUE_NUM, process_packet)
+        nfqueue.run()
+    except KeyboardInterrupt:
+        print("\n[!] Interruption détectée.")
+    finally:
+        print("[+] Nettoyage des règles iptables...")
+        manage_iptables("-D")
+        print("[+] Terminé.")

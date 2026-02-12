@@ -1,0 +1,85 @@
+title = "Firefence configuration file"
+version = "0.1.0"
+ascii_art = ""
+
+# TODO:
+#   - Test DLP service
+#   - Test DDOS-Shield service
+#   - Code Log Sniffer
+#   - Code fail2ban service
+#   - Code webids service
+
+[config]
+logfile_name = "fireFence.log"
+
+[firewall]
+id = "firewall"
+name = "Firewall"
+desc = "Firewall engine that create rules to authorize/block traffic."
+
+    [[firewall.lists]]
+    name = "firefence-whitelist"
+    chains = ["INPUT", "OUTPUT"]
+    action = "ACCEPT"
+    timeout = 0
+
+    [[firewall.lists]]
+    name = "firefence-blacklist"
+    chains = ["INPUT", "OUTPUT"]
+    action = "DROP"
+    timeout = 0
+
+    [[firewall.lists]]
+    name = "firefence-timeout"
+    chains = ["INPUT", "OUTPUT"]
+    action = "DROP"
+    timeout = 60
+
+[engines]
+    [engines.pkt-sniffer]
+    id = "pkt-sniffer"
+    name = "Packet Sniffer"
+    desc = "Sniffer engine that capture traffic, can drop request if threath found."
+    capture_file_name = "firefence_capture"
+    queue_nb = 42
+
+        [[engines.pkt-sniffer.services]]
+        id = "ddos-shield"
+        name = "DDOS Shield"
+        desc = "Detect DDoS attack, if more than threshold, timeout the ip."
+        threshold = 150
+        timeout = 60
+        window = 5
+        db_index = 43
+
+        [[engines.pkt-sniffer.services]]
+        id = "dlp"
+        name = "Data Loss Prevention"
+        desc = "Detect data exfiltration, if more than threshold, timeout the ip."
+        threshold = 5
+        timeout = 500
+        window = 120
+        db_index = 42
+
+    [engines.log-sniffer]
+    id = "log-sniffer"
+    name = "Log Sniffer"
+    desc = "Sniffer engine that capture log."
+
+        [[engines.log-sniffer.fail2ban]]
+        id = "fail2ban"
+        name = "Fail2Ban"
+        desc = "Count failed ssh login attempt, if more than threshold, timeout the ip."
+        threshold = 0
+        timeout = 0
+
+        [[engines.log-sniffer.webids]]
+        id = "webids"
+        name = "Web Intrusion Detection System"
+        desc = "Block directory brute force attack, SQL injection, XSS attack, etc. If more than threshold, timeout the ip."
+        threshold = 0
+        timeout = 0
+
+
+
+
