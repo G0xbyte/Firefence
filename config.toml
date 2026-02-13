@@ -41,16 +41,17 @@ desc = "Firewall engine that create rules to authorize/block traffic."
     name = "Packet Sniffer"
     desc = "Sniffer engine that capture traffic, can drop request if threath found."
     capture_file_name = "firefence_capture"
-    queue_nb = 42
+    queue_nb = 1
 
         [[engines.pkt-sniffer.services]]
         id = "ddos-shield"
         name = "DDOS Shield"
         desc = "Detect DDoS attack, if more than threshold, timeout the ip."
-        threshold = 150
+        threshold = 200
         timeout = 60
         window = 5
-        db_index = 43
+        db_index = 4
+        db_port = 65520
 
         [[engines.pkt-sniffer.services]]
         id = "dlp"
@@ -59,7 +60,8 @@ desc = "Firewall engine that create rules to authorize/block traffic."
         threshold = 5
         timeout = 500
         window = 120
-        db_index = 42
+        db_index = 5
+        db_port = 65521
 
     [engines.log-sniffer]
     id = "log-sniffer"

@@ -9,15 +9,16 @@ class DdosShield(BaseService):
         self.timeout = self.config["timeout"]
         self.sniff_window = self.config["window"]
         self.dbindex = self.config["db_index"]
+        self.dbport = self.config["db_port"]
 
-        self.redis = redis.Redis(host='localhost', port=6379, db=27, decode_responses=True)
-
+        self.redis = redis.Redis(host='localhost', port=self.dbport, db=self.dbindex, decode_responses=True)
 
     def _process(self, pkt):
+        # return True
         src_ip = pkt.dst
 
         if self.redis.exists(f"blocked:{src_ip}"):
-            return
+            return False
 
         current_count = self.redis.incr(src_ip)
 
@@ -26,7 +27,8 @@ class DdosShield(BaseService):
             log(f"<info>[DDOS] Monitoring new IP: {src_ip}<info>")
 
         if current_count > self.threshold:
-            self.firewall.set_timeout(src_ip, self.timeout)
+            # self.firewall.set_timeout(src_ip, self.timeout)
             self.redis.setex(f"blocked:{src_ip}", self.timeout, "true")
-            return
+            log(f"<warning>[DDOS] IP {src_ip} blocked for {self.timeout} seconds (count: {current_count})</warning>")
+            return False
         return True

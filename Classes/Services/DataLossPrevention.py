@@ -47,10 +47,22 @@ class DataLossPrevention(BaseService):
         self.timeout = self.config["timeout"]
         self.sniff_window = self.config["window"]
         self.dbindex = self.config["db_index"]
-        self.redis = redis.Redis(host='localhost', port=6379, db=self.dbindex, decode_responses=True)
+        self.dbport = self.config["db_port"]
+
+        self.redis = redis.Redis(host='localhost', port=self.dbport, db=self.dbindex, decode_responses=True)
+
+        self.ua_pattern = re.compile("|".join(map(re.escape, suspicious_user_agents)), re.IGNORECASE)
+        self.base64_pattern = re.compile(r'[A-Za-z0-9+/]{10,}=*', re.ASCII | re.MULTILINE)
+        self.leak_pattern = {
+            "Email": re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', re.IGNORECASE),
+            "Phone": re.compile(r'(?:\+|00)([1-9]\d{0,3})[.\-\s]?\(?\d{1,4}\)?(?:[.\-\s]?\d{2,4}){3,4}'),
+            "Credit_Card": re.compile(r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\d{3})\d{11})\b')
+        }
 
     def _process(self, pkt):
         log(f"<bold>[DLP] pkt received {pkt.src} -> {pkt.dst}:</bold> {pkt.summary()}")
+        if self.redis.exists(f"blocked:{pkt.dst}"):
+            return False
 
         if self.is_exfiltration(pkt, pkt.dst):
             log("<info>[DLP] exfiltration detected</info>")
@@ -71,20 +83,13 @@ class DataLossPrevention(BaseService):
         return None
 
     def is_base64(self, payload):
-        BASE64_FRAG_RE = re.compile(r'[A-Za-z0-9+/]{16,}=*', re.ASCII | re.MULTILINE)
-        return [m.group() for m in BASE64_FRAG_RE.finditer(payload)]
+        return [m.group() for m in self.base64_pattern.finditer(payload)]
 
     def is_d_leak(self, payload):
-        SENSITIVE_PATTERNS = {
-            "Email": re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', re.IGNORECASE),
-            "Phone": re.compile(r'(?:\+|00)([1-9]\d{0,3})[.\-\s]?\(?\d{1,4}\)?(?:[.\-\s]?\d{2,4}){3,4}'),
-            "Credit_Card": re.compile(r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\d{3})\d{11})\b')
-        }
-
         if not payload:
             return False
 
-        for _, pattern in SENSITIVE_PATTERNS.items():
+        for pattern in self.leak_pattern:
             matches = pattern.findall(payload)
             if matches:
                 return True
@@ -92,7 +97,7 @@ class DataLossPrevention(BaseService):
     def is_suspicious(self, type, payload):
         if not payload:
             return False
-        log(f"[DEBUG] is_sus ?")
+
         if type == "DNS":
             if self.is_base64(payload):
                 return True
@@ -101,9 +106,8 @@ class DataLossPrevention(BaseService):
 
         if type == "COOKIE" or type == "POST" or type == "USER-AGENT":
             if type == "USER-AGENT":
-                for sus_ua in SUS_UA:
-                    if sus_ua.lower() in payload.lower():
-                        return True
+                if self.ua_pattern.search(payload):
+                    return True
             if self.is_d_leak(payload):
                 return True
             if self.is_base64(payload):
@@ -141,6 +145,8 @@ class DataLossPrevention(BaseService):
             if current_count == 1:
                 self.redis.expire(dest_ip, self.sniff_window)
             if current_count > self.threshold:
+                redis.setex(f"blocked:{dest_ip}", self.timeout, "true")
                 self.firewall.set_timeout(dest_ip, self.timeout)
+            log(f"<info>[DEBUG] MALICIOUS: {pkt.src} -> {dest_ip} : {pkt.summary()}</info>")
             return True
         return False

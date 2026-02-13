@@ -166,37 +166,22 @@ class PktSnifferEngine(SnifferEngine):
 
     def _packet_callback(self, nf_packet):
         pkt = IP(nf_packet.get_payload())
-
         should_drop = False
-
 
         if pkt.haslayer(TCP) and (pkt[TCP].dport == 443 or pkt[TCP].sport == 443):
             nf_packet.accept()
             return
 
-        print(f"DEBUG: {pkt.summary()}")
-
         if self.do_log:
             self.pkt_w.write(bytes(pkt))
 
-        debug = False
-
-        if pkt.haslayer(DNS) and pkt[DNS].qr == 0:
-            print(f"DNS detected")
-            debug = True
-        elif pkt.haslayer(HTTPRequest):
-            print(f"HTTP Request detected: {pkt[HTTPRequest].Method}")
-            debug = True
-
-        print(f"DEBUG: {debug}")
-        if debug:
-            for _, inst in self.active_services.items():
-                if not inst._process(pkt):
-                    should_drop = True
-                    break
+        for _, inst in self.active_services.items():
+            if not inst._process(pkt):
+                should_drop = True
+                break
 
         if should_drop:
-            log(f"<info>[{self.name}] Pkt drop: {pkt.src} {pkt.dst}</info>")
+            log(f"<info>[{self.name}] Pkt drop: {pkt.src} -> {pkt.dst}: {pkt.summary()}</info>", log=logging.INFO)
             nf_packet.drop()
         else:
             nf_packet.accept()
@@ -220,6 +205,7 @@ class PktSnifferEngine(SnifferEngine):
             log(f"<error>[PKTSNIFF] {self.name} encountered an error: {error_details}</error>", log=logging.ERROR)
             self._stop()
         finally:
+            log(f"<info>[DEBUG] clean ipt rules</info>")
             if self.pkt_w:
                 self.pkt_w.close()
             self.ipt_rm_rules()
