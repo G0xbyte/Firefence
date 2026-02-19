@@ -2,21 +2,28 @@ from scapy.all import IP, DNS, TCP, Raw
 from scapy.layers.http import HTTPRequest, HTTP
 from scapy.utils import PcapWriter
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
 from netfilterqueue import NetfilterQueue
 from datetime import datetime
 import subprocess
 import threading
 import socket
+import os
+import traceback
 
 from Classes.Logging import log, logging
 from Classes.Services.DataLossPrevention import DataLossPrevention
 from Classes.Services.DdosShield import DdosShield
+from Classes.Services.Fail2ban import Fail2ban
+from Classes.Services.WebIDS import WebIDS
 
 SERVICES = {
     "ddos-shield": DdosShield,
     "dlp": DataLossPrevention,
-    "fail2ban": None,
-    "webids": None,
+    "fail2ban": Fail2ban,
+    "webids": WebIDS,
 }
 
 class SnifferEngine():
@@ -54,7 +61,8 @@ class SnifferEngine():
             log(f"<ok>[{self.name}] Service {service_name} started in engine.</ok>", log=logging.INFO)
             return True
         except Exception as e:
-            log(f"<error>[{self.name}] Failed to start service {service_name}: {e}</error>")
+            details = traceback.extract_stack()
+            log(f"<error>[{self.name}] Failed to start service {service_name}: {details}</error>")
             return False
 
     def _stop_service(self, service_name):
@@ -143,8 +151,6 @@ class PktSnifferEngine(SnifferEngine):
         self.nfqueue = NetfilterQueue()
         self.do_log = False
 
-        # self.methods = (b"GET", b"POST", b"PUT", b"DELETE", b"HEAD", b"OPTIONS")
-
         start_time = datetime.now().strftime('%d-%m-%y-%H:%M:%S')
         self.cap_file = self.config["capture_file_name"] + f"{start_time}" + ".pcap"
         self.pkt_w = None
@@ -175,16 +181,18 @@ class PktSnifferEngine(SnifferEngine):
         if self.do_log:
             self.pkt_w.write(bytes(pkt))
 
-        for _, inst in self.active_services.items():
-            if not inst._process(pkt):
-                should_drop = True
-                break
+        try:
+            for _, inst in self.active_services.items():
+                if not inst._process(pkt):
+                    should_drop = True
+                    break
+        except Exception as e:
+            log(f"<error>[{self.name}] Error processing packet: {e}</error>", log=logging.ERROR)
 
         if should_drop:
             log(f"<info>[{self.name}] Pkt drop: {pkt.src} -> {pkt.dst}: {pkt.summary()}</info>", log=logging.INFO)
             nf_packet.drop()
-        else:
-            nf_packet.accept()
+        nf_packet.accept()
 
     def _run(self):
         self.nfqueue.bind(self.queue_num, self._packet_callback)
@@ -205,7 +213,6 @@ class PktSnifferEngine(SnifferEngine):
             log(f"<error>[PKTSNIFF] {self.name} encountered an error: {error_details}</error>", log=logging.ERROR)
             self._stop()
         finally:
-            log(f"<info>[DEBUG] clean ipt rules</info>")
             if self.pkt_w:
                 self.pkt_w.close()
             self.ipt_rm_rules()
@@ -225,9 +232,96 @@ class PktSnifferEngine(SnifferEngine):
             return
         log(f"<warning>[PKTSNIFF] Invalid logging status: {args[0]}\n\tOptions: true / on | false / off</warning>")
 
+class LogHandler(FileSystemEventHandler):
+    def __init__(self, engine):
+        self.engine = engine
+        self.offsets = {}
+
+    def on_modified(self, event):
+        if event.is_directory:
+                    return
+
+        target_path = os.path.abspath(event.src_path)
+
+        for service in self.engine.active_services.values():
+            if target_path in [os.path.abspath(p) for p in service.paths]:
+                self.process_log(target_path, service)
+
+    def process_log(self, file_path, service_instance):
+        try:
+            with open(file_path, 'r') as f:
+                offset = self.offsets.get(file_path, 0)
+                f.seek(offset)
+
+                lines = f.readlines()
+                self.offsets[file_path] = f.tell()
+
+                for line in lines:
+                    log(f"<info>[{self.engine.name}] Processing log line from {file_path}: {line.strip()}</info>", log=logging.DEBUG)
+                    service_instance._process(line.strip())
+        except Exception as e:
+            log(f"<error>[Handler] Error reading {file_path}: {e}</error>")
+
+
 class LogSnifferEngine(SnifferEngine):
     def _setup(self):
-        pass
+        self.observer = Observer()
+        self.handler = LogHandler(self)
+        self.watches = {}
+        self.dir_ref_counts = {}
 
     def _run(self):
-        print(f"[LOGSNIFF] Starting..")
+        self.observer.start()
+
+        try:
+            while self.running:
+                threading.Event().wait(1)
+        finally:
+            self.observer.stop()
+            self.observer.join()
+
+    def _add_service(self, service_name):
+        success = super()._add_service(service_name)
+        if success:
+            instance = self.active_services[service_name]
+            print(f"DEBUG3: {instance.paths}")
+            for path in instance.paths:
+                log(f"<info>[{self.name}] Scheduling watch for {service_name} on path: {path}</info>", log=logging.INFO)
+                self._schedule_watch(path)
+        return success
+
+    def _stop_service(self, service_name):
+        if service_name in self.active_services:
+            instance = self.active_services[service_name]
+            paths_to_check = instance.paths
+
+            success = super()._stop_service(service_name)
+            if success:
+                for path in paths_to_check:
+                    log(f"<info>[{self.name}] Checking if watch can be removed for path: {path}</info>", log=logging.INFO)
+                    self._unschedule_watch(path)
+            return success
+        return False
+
+    def _schedule_watch(self, path):
+        path = os.path.abspath(path)
+        directory = os.path.dirname(path)
+
+        # Track how many files in this directory we are watching
+        self.dir_ref_counts[directory] = self.dir_ref_counts.get(directory, 0) + 1
+
+        if directory not in self.watches:
+            watch = self.observer.schedule(self.handler, directory, recursive=False)
+            self.watches[directory] = watch # Map by directory, not file
+
+    def _unschedule_watch(self, path):
+        path = os.path.abspath(path)
+        still_needed = any(
+            path in [os.path.abspath(p) for p in s.paths]
+            for s in self.active_services.values()
+        )
+
+        if not still_needed and path in self.watches:
+            self.observer.unschedule(self.watches[path])
+            del self.watches[path]
+            log(f"<info>[{self.name}] Unwatched path: {path}</info>")

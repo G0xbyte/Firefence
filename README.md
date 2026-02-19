@@ -4,16 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: Linux Only](https://img.shields.io/badge/Platform-Linux-orange.svg)](https://www.linux.org)
 
-**Firefence** is a python wrapper that run services like a sniffer, ipfilter , anti ddos and more. It use **Scapy**, **Kernel Linux (IPSet)**.
+**Firefence** is a python wrapper with ipset to act like a firewall you can start sniffer engine and services.
 
-Here is the list of services:
-- Sniffer ✅
-- Filter ✅
-- No DDOS ✅
-- No exfiltration ❌
-- Fail2ban ❌
-- IPS
+Here is the list of engine and their services.
+- Packet sniffer:
+DDOS Shield
+Data Loss Prevention
+- Log sniffer:
+Fail2ban
+Web IDS
 
+You can edit everything in the config.toml
 
 ## 🛠️ Installation
 
@@ -48,46 +49,20 @@ It provides a single entry point to start, stop, and monitor each service.
 ### Available Commands
 
 ```bash
-<service> on # Starts a specific service.
+start <engine> # Starts an engine.
+start <engine>.<service> # Starts a engine's service.
 
-<service> off # Stop a specific service.
+stop <engine> # Stop an engine.
+stop <engine>.<service> # Stop a engine's service.
 
-status # See active and inactive services
+info # See active and inactive services
 
-# ⚠️ Services depend on each other, it will be detailed bellow
+run <engine> cmd args # Run a command for an engine
+run <engine>.<service> cmd args # Run a command for an engine's service.
+
+
 ```
 ## 🔌 Services Commands
 
 ### Sniffer
-The sniffer service will sniff eveything that is happening on the machine. It will create a socket so other services can acces the broadcast informations.
-```bash
-/
-```
-### Filter
-#### ⚠️ **Sniffer** need to be started.
-The filter service use 3 ipset: blacklist, whitelist and timeout so you can manage ip like you want.
-```bash
-filter log [on | off] # Enable or disable packet logging into the logfile
-
-filter blacklist <IP> # Add an IP address to the blacklist
-
-filter unblacklist <IP> # Remove an IP address from the blacklist
-
-filter whitelist <IP> # Add an IP address to the whitelist
-
-filter unwhitelist <IP> # Remove an IP address from the whitelist
-
-filter timeout <IP> # Temporarily block an IP for 60 seconds
-
-filter list # Display current blacklisted and whitelisted IPs (not working use 'sudo ipset list' instead)
-```
-### No DDOS
-#### ⚠️ **Sniffer** & **Filter** need to be started.
-The no ddos service will block ip that send to many request (adding them to the timemout ipset)
-```bash
-/
-```
-
-## ✨ Tips
-
-#### For each service a logging system is implement to see what's happening I advice you to run `tail -f <logfile.log>` so you can track everything.
+### ⚠️ ** TODO **

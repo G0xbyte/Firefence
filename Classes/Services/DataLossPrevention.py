@@ -48,8 +48,9 @@ class DataLossPrevention(BaseService):
         self.sniff_window = self.config["window"]
         self.dbindex = self.config["db_index"]
         self.dbport = self.config["db_port"]
+        self.host = self.config["host"]
 
-        self.redis = redis.Redis(host='localhost', port=self.dbport, db=self.dbindex, decode_responses=True)
+        self.redis = redis.Redis(host=self.host, port=self.dbport, db=self.dbindex, decode_responses=True)
 
         self.ua_pattern = re.compile("|".join(map(re.escape, suspicious_user_agents)), re.IGNORECASE)
         self.base64_pattern = re.compile(r'[A-Za-z0-9+/]{10,}=*', re.ASCII | re.MULTILINE)

@@ -1,4 +1,4 @@
-from .Logging import log
+from .Logging import log, logging
 
 class BaseService:
     def __init__(self, config, firewall):

@@ -114,3 +114,4 @@ Thumbs.db
 legacy/
 upload.sh
 firenv/
+*.pcap

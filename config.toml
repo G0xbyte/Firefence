@@ -2,13 +2,6 @@ title = "Firefence configuration file"
 version = "0.1.0"
 ascii_art = ""
 
-# TODO:
-#   - Test DLP service
-#   - Test DDOS-Shield service
-#   - Code Log Sniffer
-#   - Code fail2ban service
-#   - Code webids service
-
 [config]
 logfile_name = "fireFence.log"
 
@@ -50,8 +43,9 @@ desc = "Firewall engine that create rules to authorize/block traffic."
         threshold = 200
         timeout = 60
         window = 5
+        host = "localhost"
+        db_port = 6379
         db_index = 4
-        db_port = 65520
 
         [[engines.pkt-sniffer.services]]
         id = "dlp"
@@ -60,27 +54,44 @@ desc = "Firewall engine that create rules to authorize/block traffic."
         threshold = 5
         timeout = 500
         window = 120
+        host = "localhost"
+        db_port = 6379
         db_index = 5
-        db_port = 65521
 
     [engines.log-sniffer]
     id = "log-sniffer"
     name = "Log Sniffer"
     desc = "Sniffer engine that capture log."
 
-        [[engines.log-sniffer.fail2ban]]
+        [[engines.log-sniffer.services]]
         id = "fail2ban"
         name = "Fail2Ban"
         desc = "Count failed ssh login attempt, if more than threshold, timeout the ip."
         threshold = 0
         timeout = 0
+        log_paths = [
+            "/home/gxby/Documents/github/Firefence/legacy/test_auth.log"
+        ]
+        regex = [
+            'Failed password for .* from (?P<ip>\d+\.\d+\.\d+\.\d+)',
+            'Invalid user .* from (?P<ip>\d+\.\d+\.\d+\.\d+)',
+            'Connection closed by invalid user .* from (?P<ip>\d+\.\d+\.\d+\.\d+)'
+        ]
 
-        [[engines.log-sniffer.webids]]
+        [[engines.log-sniffer.services]]
         id = "webids"
         name = "Web Intrusion Detection System"
         desc = "Block directory brute force attack, SQL injection, XSS attack, etc. If more than threshold, timeout the ip."
         threshold = 0
         timeout = 0
+        log_paths = [
+            "/var/log/apache2/error.log"
+        ]
+        regex = [
+            '(?P<ip>\d+\.\d+\.\d+\.\d+) .* \"GET .*\.(php|asp|env|sql|config) HTTP.*\" 404',
+            '(?P<ip>\d+\.\d+\.\d+\.\d+) .* \"POST /wp-login\.php HTTP.*\" 200',
+            '(\.\./|\%2e\%2e\%2f|/etc/passwd|/bin/sh)'
+        ]
 
 
 
